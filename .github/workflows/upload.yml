@@ -9,6 +9,10 @@ on:
         description: 'JSON Task Payload from Main VPS'
         required: true
 
+concurrency:
+  group: gpmc_upload_pipeline
+  cancel-in-progress: false
+
 jobs:
   upload-worker:
     runs-on: ubuntu-latest
