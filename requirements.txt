@@ -1,0 +1,5 @@
+httpx
+requests
+selenium
+webdriver-manager
+urllib3
