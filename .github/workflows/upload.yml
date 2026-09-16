@@ -1,33 +1,24 @@
-name: GPhotos Cloud Worker Uploader
+name: Instant GPhotos GPMC Pixel XL Worker
 
 on:
   repository_dispatch:
     types: [instant_upload]
   workflow_dispatch:
     inputs:
-      file_id:
-        description: 'File ID in Database'
-        required: true
-      filename:
-        description: 'File Name'
-        required: true
-      source_url:
-        description: 'Direct Download Source URL'
-        required: true
-      callback_url:
-        description: 'Site Webhook Callback URL'
+      task_payload:
+        description: 'JSON Task Payload from Main VPS'
         required: true
 
 jobs:
-  process-and-upload:
+  upload-worker:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
-      - name: Checkout Repository Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Maximize Free SSD Disk Space (Up to 45GB+)
+      - name: Maximize Free SSD Disk Space (45GB+ Available)
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
@@ -47,22 +38,8 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install Google Chrome & ChromeDriver
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget curl unzip libxi6 libgconf-2-4 libnss3
-          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
-
-      - name: Run Download and Google Photos Upload
+      - name: Run GPMC Pixel XL Upload Worker
         env:
-          GPHOTOS_COOKIES_JSON: ${{ secrets.GPHOTOS_COOKIES_JSON }}
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
-          FILE_ID: ${{ github.event.client_payload.file_id || inputs.file_id }}
-          FILENAME: ${{ github.event.client_payload.filename || inputs.filename }}
-          SOURCE_URL: ${{ github.event.client_payload.source_url || inputs.source_url }}
-          CALLBACK_URL: ${{ github.event.client_payload.callback_url || inputs.callback_url }}
+          TASK_PAYLOAD: ${{ github.event.client_payload.payload || github.event.inputs.task_payload }}
         run: |
-          python uploader.py
+          python worker.py
