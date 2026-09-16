@@ -1,0 +1,68 @@
+name: GPhotos Cloud Worker Uploader
+
+on:
+  repository_dispatch:
+    types: [instant_upload]
+  workflow_dispatch:
+    inputs:
+      file_id:
+        description: 'File ID in Database'
+        required: true
+      filename:
+        description: 'File Name'
+        required: true
+      source_url:
+        description: 'Direct Download Source URL'
+        required: true
+      callback_url:
+        description: 'Site Webhook Callback URL'
+        required: true
+
+jobs:
+  process-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: Maximize Free SSD Disk Space (Up to 45GB+)
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Google Chrome & ChromeDriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget curl unzip libxi6 libgconf-2-4 libnss3
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Run Download and Google Photos Upload
+        env:
+          GPHOTOS_COOKIES_JSON: ${{ secrets.GPHOTOS_COOKIES_JSON }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          FILE_ID: ${{ github.event.client_payload.file_id || inputs.file_id }}
+          FILENAME: ${{ github.event.client_payload.filename || inputs.filename }}
+          SOURCE_URL: ${{ github.event.client_payload.source_url || inputs.source_url }}
+          CALLBACK_URL: ${{ github.event.client_payload.callback_url || inputs.callback_url }}
+        run: |
+          python uploader.py
