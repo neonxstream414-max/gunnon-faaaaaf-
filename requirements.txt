@@ -1,5 +1,6 @@
-httpx
+gpmc
 requests
-selenium
-webdriver-manager
+httpx
 urllib3
+cryptography
+protobuf
