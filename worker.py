@@ -24,17 +24,10 @@ FILENAME = payload.get("filename") or os.environ.get("FILENAME", "video.mkv")
 DOWNLOAD_URL = payload.get("download_url") or os.environ.get("DOWNLOAD_URL", "")
 ACCOUNTS = payload.get("accounts") or []
 CALLBACK_URL = payload.get("callback_url") or os.environ.get("CALLBACK_URL", "")
-API_KEY = payload.get("api_key") or os.environ.get("API_KEY", "")
-
-TEMP_FILE = os.path.join("/tmp", f"worker_{UNIQUE_ID}_{int(time.time())}.tmp")
-CHUNK_SIZE = 10 * 1024 * 1024  # 10MB chunks for GPMC
-
+if not CALLBACK_URL or "mhbcloud.xyz" in CALLBACK_URL:
+    CALLBACK_URL = "https://new.driveshare.top/api/instant/callback"
 
 def send_callback(status: str, progress: int = 0, step: str = "", instant_url: str = "", error_msg: str = None):
-    if not CALLBACK_URL:
-        logger.warning("No CALLBACK_URL provided. Skipping callback.")
-        return
-
     cb_data = {
         "task_id": TASK_ID,
         "unique_id": UNIQUE_ID,
@@ -45,12 +38,16 @@ def send_callback(status: str, progress: int = 0, step: str = "", instant_url: s
         "error_msg": error_msg,
     }
     logger.info(f"Sending callback: status={status}, step={step}, instant_url={instant_url[:40]}...")
-    try:
-        headers = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
-        resp = requests.post(CALLBACK_URL, json=cb_data, headers=headers, timeout=20)
-        logger.info(f"Callback HTTP Response: {resp.status_code}")
-    except Exception as e:
-        logger.error(f"Callback request failed: {e}")
+    
+    urls_to_try = [CALLBACK_URL, "https://new.driveshare.top/api/instant/callback"]
+    for url in list(dict.fromkeys(urls_to_try)):
+        try:
+            resp = requests.post(url, json=cb_data, timeout=15)
+            logger.info(f"Callback ({url}) HTTP Response: {resp.status_code}")
+            if resp.status_code == 200:
+                break
+        except Exception as e:
+            logger.error(f"Callback request to {url} failed: {e}")
 
 
 def download_file(url: str, dest_path: str):
