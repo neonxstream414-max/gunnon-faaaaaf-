@@ -105,6 +105,10 @@ def upload_to_gphotos_gpmc(file_path: str, filename: str, auth_data: str) -> Opt
     from gpmc.client import Client
     from gpmc.hash_handler import calculate_sha1_hash
 
+    # Auto-ensure oauth2_foreground=1 is present to prevent KeyError
+    if "oauth2_foreground" not in auth_data:
+        auth_data = auth_data.rstrip("&") + "&oauth2_foreground=1"
+
     last_err = None
     for attempt in range(3):
         try:
