@@ -27,6 +27,9 @@ CALLBACK_URL = payload.get("callback_url") or os.environ.get("CALLBACK_URL", "")
 if not CALLBACK_URL or "mhbcloud.xyz" in CALLBACK_URL:
     CALLBACK_URL = "https://new.driveshare.top/api/instant/callback"
 
+TEMP_FILE = os.path.join("/tmp", f"worker_{UNIQUE_ID}_{int(time.time())}.tmp")
+CHUNK_SIZE = 10 * 1024 * 1024
+
 def send_callback(status: str, progress: int = 0, step: str = "", instant_url: str = "", error_msg: str = None):
     cb_data = {
         "task_id": TASK_ID,
