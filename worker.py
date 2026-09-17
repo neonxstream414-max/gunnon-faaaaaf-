@@ -105,39 +105,49 @@ def upload_to_gphotos_gpmc(file_path: str, filename: str, auth_data: str) -> Opt
     from gpmc.client import Client
     from gpmc.hash_handler import calculate_sha1_hash
 
-    client = Client(auth_data=auth_data, timeout=600)
-    file_size = os.path.getsize(file_path)
+    last_err = None
+    for attempt in range(3):
+        try:
+            client = Client(auth_data=auth_data, timeout=600)
+            file_size = os.path.getsize(file_path)
 
-    # 1. SHA1 Hash
-    hash_bytes, hash_b64 = calculate_sha1_hash(Path(file_path), LoggingProgress(), None)
+            # 1. SHA1 Hash
+            hash_bytes, hash_b64 = calculate_sha1_hash(Path(file_path), LoggingProgress(), None)
 
-    # 2. Check duplicate
-    existing = client.api.find_remote_media_by_hash(hash_bytes)
-    if existing:
-        logger.info(f"File already exists in Google Photos: {existing}")
-        return existing
+            # 2. Check duplicate
+            existing = client.api.find_remote_media_by_hash(hash_bytes)
+            if existing:
+                logger.info(f"File already exists in Google Photos: {existing}")
+                return existing
 
-    # 3. Get upload token
-    upload_token = client.api.get_upload_token(hash_b64, file_size)
-    if not upload_token:
-        raise ValueError("Failed to get Google Photos upload token")
+            # 3. Get upload token
+            upload_token = client.api.get_upload_token(hash_b64, file_size)
+            if not upload_token:
+                raise ValueError("Failed to get Google Photos upload token")
 
-    # 4. Upload file chunks
-    file_gen = chunked_reader(file_path)
-    upload_response = client.api.upload_file(file=file_gen, upload_token=upload_token)
-    if not upload_response:
-        raise ValueError("upload_file returned empty response")
+            # 4. Upload file chunks
+            file_gen = chunked_reader(file_path)
+            upload_response = client.api.upload_file(file=file_gen, upload_token=upload_token)
+            if not upload_response:
+                raise ValueError("upload_file returned empty response")
 
-    # 5. Commit with Pixel XL (Unlimited Free Storage Trick)
-    media_key = client.api.commit_upload(
-        upload_response_decoded=upload_response,
-        file_name=filename,
-        sha1_hash=hash_bytes,
-        upload_timestamp=int(time.time()),
-        model="Pixel XL",
-        quality="original",
-    )
-    return media_key
+            # 5. Commit with Pixel XL (Unlimited Free Storage Trick)
+            media_key = client.api.commit_upload(
+                upload_response_decoded=upload_response,
+                file_name=filename,
+                sha1_hash=hash_bytes,
+                upload_timestamp=int(time.time()),
+                model="Pixel XL",
+                quality="original",
+            )
+            return media_key
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                logger.warning(f"gpmc attempt {attempt+1} failed ({e}), retrying in 3s...")
+                time.sleep(3)
+                continue
+            raise last_err
 
 
 def main():
