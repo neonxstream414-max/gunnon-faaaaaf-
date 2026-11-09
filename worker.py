@@ -42,10 +42,14 @@ def send_callback(status: str, progress: int = 0, step: str = "", instant_url: s
     }
     logger.info(f"Sending callback: status={status}, step={step}, instant_url={instant_url[:40]}...")
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+        "Content-Type": "application/json"
+    }
     urls_to_try = [CALLBACK_URL, "https://new.driveshare.top/api/instant/callback"]
     for url in list(dict.fromkeys(urls_to_try)):
         try:
-            resp = requests.post(url, json=cb_data, timeout=15)
+            resp = requests.post(url, json=cb_data, headers=headers, timeout=15)
             logger.info(f"Callback ({url}) HTTP Response: {resp.status_code}")
             if resp.status_code == 200:
                 break
@@ -58,7 +62,8 @@ def download_file(url: str, dest_path: str):
     send_callback(status="processing", progress=5, step="downloading")
     
     t0 = time.time()
-    with requests.get(url, stream=True, timeout=120) as r:
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+    with requests.get(url, stream=True, headers=headers, timeout=180) as r:
         r.raise_for_status()
         total_size = int(r.headers.get("content-length", 0))
         downloaded = 0
@@ -105,7 +110,6 @@ def upload_to_gphotos_gpmc(file_path: str, filename: str, auth_data: str) -> Opt
     from gpmc.client import Client
     from gpmc.hash_handler import calculate_sha1_hash
 
-    # Auto-ensure oauth2_foreground=1 is present to prevent KeyError
     if "oauth2_foreground" not in auth_data:
         auth_data = auth_data.rstrip("&") + "&oauth2_foreground=1"
 
@@ -115,27 +119,25 @@ def upload_to_gphotos_gpmc(file_path: str, filename: str, auth_data: str) -> Opt
             client = Client(auth_data=auth_data, timeout=600)
             file_size = os.path.getsize(file_path)
 
-            # 1. SHA1 Hash
             hash_bytes, hash_b64 = calculate_sha1_hash(Path(file_path), LoggingProgress(), None)
 
-            # 2. Check duplicate
             existing = client.api.find_remote_media_by_hash(hash_bytes)
             if existing:
                 logger.info(f"File already exists in Google Photos: {existing}")
-                return existing
+                res = str(existing).strip().strip("'").strip('"')
+                if res.startswith("bAF1Qip"):
+                    res = res[1:]
+                return res
 
-            # 3. Get upload token
             upload_token = client.api.get_upload_token(hash_b64, file_size)
             if not upload_token:
                 raise ValueError("Failed to get Google Photos upload token")
 
-            # 4. Upload file chunks
             file_gen = chunked_reader(file_path)
             upload_response = client.api.upload_file(file=file_gen, upload_token=upload_token)
             if not upload_response:
                 raise ValueError("upload_file returned empty response")
 
-            # 5. Commit with Pixel XL (Unlimited Free Storage Trick)
             media_key = client.api.commit_upload(
                 upload_response_decoded=upload_response,
                 file_name=filename,
@@ -144,6 +146,16 @@ def upload_to_gphotos_gpmc(file_path: str, filename: str, auth_data: str) -> Opt
                 model="Pixel XL",
                 quality="original",
             )
+            if isinstance(media_key, bytes):
+                media_key = media_key.decode("utf-8", errors="ignore")
+            media_key = str(media_key).strip().strip("'").strip('"')
+            if media_key.startswith("b'") or media_key.startswith('b"'):
+                media_key = media_key[2:]
+            if media_key.endswith("'") or media_key.endswith('"'):
+                media_key = media_key[:-1]
+            if media_key.startswith("bAF1Qip"):
+                media_key = media_key[1:]
+            media_key = media_key.strip().strip("'").strip('"')
             return media_key
         except Exception as e:
             last_err = e
@@ -194,7 +206,7 @@ def main():
             raise Exception("Upload failed across all provided Google Photos accounts.")
 
         final_instant_url = ", ".join(uploaded_copies)
-        logger.info(f"🎉 All copies uploaded successfully! Result: {final_instant_url}")
+        logger.info(f"All copies uploaded successfully! Result: {final_instant_url}")
         send_callback(status="completed", progress=100, step="completed", instant_url=final_instant_url)
 
     except Exception as e:
