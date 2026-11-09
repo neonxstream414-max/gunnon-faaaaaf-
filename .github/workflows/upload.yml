@@ -10,7 +10,7 @@ on:
         required: true
 
 concurrency:
-  group: gpmc_upload_pipeline
+  group: upload-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
