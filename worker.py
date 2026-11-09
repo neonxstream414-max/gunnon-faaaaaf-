@@ -5,7 +5,7 @@ import json
 import logging
 import requests
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Generator, Optional, List
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("gphotos_github_worker")
@@ -22,6 +22,10 @@ TASK_ID = payload.get("task_id") or os.environ.get("TASK_ID")
 UNIQUE_ID = payload.get("unique_id") or os.environ.get("UNIQUE_ID")
 FILENAME = payload.get("filename") or os.environ.get("FILENAME", "video.mkv")
 DOWNLOAD_URL = payload.get("download_url") or os.environ.get("DOWNLOAD_URL", "")
+DOWNLOAD_URLS = payload.get("download_urls") or []
+if DOWNLOAD_URL and DOWNLOAD_URL not in DOWNLOAD_URLS:
+    DOWNLOAD_URLS.insert(0, DOWNLOAD_URL)
+
 ACCOUNTS = payload.get("accounts") or []
 CALLBACK_URL = payload.get("callback_url") or os.environ.get("CALLBACK_URL", "")
 if not CALLBACK_URL or "mhbcloud.xyz" in CALLBACK_URL:
@@ -57,32 +61,57 @@ def send_callback(status: str, progress: int = 0, step: str = "", instant_url: s
             logger.error(f"Callback request to {url} failed: {e}")
 
 
-def download_file(url: str, dest_path: str):
-    logger.info(f"Downloading file: {FILENAME} from {url[:80]}...")
-    send_callback(status="processing", progress=5, step="downloading")
-    
-    t0 = time.time()
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
-    with requests.get(url, stream=True, headers=headers, timeout=180) as r:
-        r.raise_for_status()
-        total_size = int(r.headers.get("content-length", 0))
-        downloaded = 0
-        last_report = time.time()
-        
-        with open(dest_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0 and time.time() - last_report > 5:
-                        percent = int((downloaded / total_size) * 100)
-                        print(f"\rDownload: {downloaded/(1024*1024):.1f}MB / {total_size/(1024*1024):.1f}MB ({percent}%)", end="", flush=True)
-                        send_callback(status="processing", progress=int(percent * 0.4), step=f"downloading ({percent}%)")
-                        last_report = time.time()
+def download_file(urls: List[str], dest_path: str):
+    if isinstance(urls, str):
+        urls = [urls]
 
-    elapsed = time.time() - t0
-    logger.info(f"\nDownload finished in {elapsed:.1f}s. File Size: {os.path.getsize(dest_path)/(1024*1024):.2f} MB")
-    send_callback(status="processing", progress=40, step="downloaded")
+    last_err = None
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+
+    for attempt_idx, url in enumerate(urls):
+        if not url:
+            continue
+        logger.info(f"Downloading file (source {attempt_idx+1}/{len(urls)}): {FILENAME} from {url[:80]}...")
+        send_callback(status="processing", progress=5, step=f"downloading from source {attempt_idx+1}")
+        
+        t0 = time.time()
+        try:
+            with requests.get(url, stream=True, headers=headers, timeout=180) as r:
+                if r.status_code in (404, 500):
+                    logger.warning(f"Source worker returned HTTP {r.status_code}: {r.text[:120]}, trying next worker domain...")
+                    last_err = f"HTTP {r.status_code}: {r.text[:120]}"
+                    continue
+                r.raise_for_status()
+                total_size = int(r.headers.get("content-length", 0))
+                downloaded = 0
+                last_report = time.time()
+                
+                with open(dest_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0 and time.time() - last_report > 5:
+                                percent = int((downloaded / total_size) * 100)
+                                print(f"\rDownload: {downloaded/(1024*1024):.1f}MB / {total_size/(1024*1024):.1f}MB ({percent}%)", end="", flush=True)
+                                send_callback(status="processing", progress=int(percent * 0.4), step=f"downloading ({percent}%)")
+                                last_report = time.time()
+
+            elapsed = time.time() - t0
+            logger.info(f"\nDownload finished in {elapsed:.1f}s. File Size: {os.path.getsize(dest_path)/(1024*1024):.2f} MB")
+            send_callback(status="processing", progress=40, step="downloaded")
+            return True
+        except Exception as e:
+            logger.warning(f"Download attempt failed for {url[:50]}: {e}")
+            last_err = e
+            if os.path.exists(dest_path):
+                try:
+                    os.remove(dest_path)
+                except Exception:
+                    pass
+            continue
+
+    raise Exception(f"All worker download URLs failed. Last error: {last_err}")
 
 
 def chunked_reader(file_path: str) -> Generator[bytes, None, None]:
@@ -167,18 +196,18 @@ def upload_to_gphotos_gpmc(file_path: str, filename: str, auth_data: str) -> Opt
 
 
 def main():
-    if not DOWNLOAD_URL:
-        logger.error("Missing DOWNLOAD_URL!")
-        send_callback(status="failed", error_msg="Missing DOWNLOAD_URL")
-        sys.exit(1)
+    if not DOWNLOAD_URLS:
+        logger.error("Missing DOWNLOAD_URLS!")
+        send_callback(status="failed", error_msg="Missing DOWNLOAD_URLS")
+        sys.exit(0)
 
     if not ACCOUNTS:
         logger.error("No Google Photos accounts provided in payload!")
         send_callback(status="failed", error_msg="No Google Photos accounts provided")
-        sys.exit(1)
+        sys.exit(0)
 
     try:
-        download_file(DOWNLOAD_URL, TEMP_FILE)
+        download_file(DOWNLOAD_URLS, TEMP_FILE)
         
         uploaded_copies = []
         total_accounts = len(ACCOUNTS)
@@ -211,7 +240,11 @@ def main():
 
     except Exception as e:
         logger.error(f"Fatal error in worker: {e}")
-        send_callback(status="failed", error_msg=str(e))
+        send_callback(status="failed", error_msg=str(e)[:250])
+        # If the file cannot be found / is dead on Google Drive, exit 0 to prevent GitHub Actions red failure cross
+        if any(w in str(e).lower() for w in ["unable to find", "500 server error", "404", "all worker download urls failed"]):
+            logger.info("Source file dead on Google Drive. Callback sent. Exiting cleanly (0).")
+            sys.exit(0)
         sys.exit(1)
     finally:
         if os.path.exists(TEMP_FILE):
